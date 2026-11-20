@@ -86,7 +86,7 @@ class USBCameraSource(CameraSource):
         cap.set(cv2.CAP_PROP_BUFFERSIZE, 1)
 
         # Uji baca 1 frame warm-up untuk mendeteksi webcam yang terkunci aplikasi lain
-        for _ in range(5):
+        for _ in range(10):
             ok, frame = cap.read()
             if ok and frame is not None and frame.size > 0:
                 self._backend_label = label
@@ -261,6 +261,15 @@ class CameraWorker(QThread):
         self._latest_frame: Optional[np.ndarray] = None
         self._fps_timestamps: deque[float] = deque(maxlen=30)
 
+    def _sleep_while_running(self, duration_sec: float) -> bool:
+        """Tidur dengan pengecekan flag _running periodik agar thread dapat berhenti instan."""
+        deadline = time.perf_counter() + duration_sec
+        while time.perf_counter() < deadline:
+            if not self._running:
+                return False
+            time.sleep(0.04)
+        return True
+
     def run(self) -> None:
         self._running = True
         opened, info_or_err = self._source.open()
@@ -287,8 +296,7 @@ class CameraWorker(QThread):
                             "Mencoba menyambungkan ulang..."
                         )
                         self._source.release()
-                        time.sleep(1.0)
-                        if not self._running:
+                        if not self._sleep_while_running(1.0):
                             break
                         reopened, reopen_msg = self._source.open()
                         if reopened:
@@ -296,7 +304,8 @@ class CameraWorker(QThread):
                             self.camera_status.emit(True, reopen_msg)
                         else:
                             self.camera_error.emit(reopen_msg)
-                            time.sleep(1.5)
+                            if not self._sleep_while_running(1.5):
+                                break
                     else:
                         time.sleep(0.015)
                     continue

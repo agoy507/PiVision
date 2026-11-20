@@ -276,7 +276,12 @@ class VideoCanvasWidget(QWidget):
         h, w = frame_bgr.shape[:2]
         self._frame_size = (w, h)
         self._qimage = bgr_to_qimage(frame_bgr)
+        self._draw_rect = self._compute_draw_rect()
         self.update()
+
+    def resizeEvent(self, event) -> None:
+        super().resizeEvent(event)
+        self._draw_rect = self._compute_draw_rect()
 
     def _compute_draw_rect(self) -> QRect:
         fw, fh = self._frame_size
@@ -290,6 +295,9 @@ class VideoCanvasWidget(QWidget):
 
     def _widget_to_frame(self, pt: QPoint) -> Tuple[int, int]:
         rect = self._draw_rect
+        if rect.width() <= 0 or rect.height() <= 0:
+            rect = self._compute_draw_rect()
+            self._draw_rect = rect
         fw, fh = self._frame_size
         if rect.width() <= 0 or rect.height() <= 0 or fw <= 0 or fh <= 0:
             return 0, 0
@@ -301,8 +309,11 @@ class VideoCanvasWidget(QWidget):
 
     def _frame_to_widget(self, fx: float, fy: float) -> QPoint:
         rect = self._draw_rect
+        if rect.width() <= 0 or rect.height() <= 0:
+            rect = self._compute_draw_rect()
+            self._draw_rect = rect
         fw, fh = self._frame_size
-        if fw <= 0 or fh <= 0:
+        if fw <= 0 or fh <= 0 or rect.width() <= 0 or rect.height() <= 0:
             return QPoint(0, 0)
         wx = rect.left() + int((fx / fw) * rect.width())
         wy = rect.top() + int((fy / fh) * rect.height())
