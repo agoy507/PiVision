@@ -1,8 +1,8 @@
 # Auto-detect text files and normalize line endings
 * text=auto eol=lf
 
-# GitHub Linguist language identification
+# Pastikan repositori terdeteksi 100% Python di GitHub Linguist
 *.py linguist-language=Python
-*.sh linguist-language=Shell
-*.bat linguist-language=Batchfile
-*.ps1 linguist-language=PowerShell
+*.sh linguist-detectable=false
+*.bat linguist-detectable=false
+*.ps1 linguist-detectable=false
