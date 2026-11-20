@@ -1,0 +1,9 @@
+# Dependensi khusus Raspberry Pi 5 (Raspberry Pi OS 64-bit ARM64)
+# Catatan: Instal python3-lgpio via apt terlebih dahulu, lalu buat venv
+# dengan flag --system-site-packages sebelum menjalankan pip install.
+
+PySide6>=6.7.0
+opencv-python>=4.10.0,<5.0.0
+numpy>=1.26.4
+gpiozero>=2.0.1
+lgpio>=0.2.2.0
