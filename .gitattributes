@@ -1,0 +1,8 @@
+# Auto-detect text files and normalize line endings
+* text=auto eol=lf
+
+# GitHub Linguist language identification
+*.py linguist-language=Python
+*.sh linguist-language=Shell
+*.bat linguist-language=Batchfile
+*.ps1 linguist-language=PowerShell
