@@ -527,7 +527,7 @@ class NGImagePreviewDialog(QDialog):
                 pixmap.scaled(860, 520, Qt.KeepAspectRatio, Qt.SmoothTransformation)
             )
         else:
-            img_label.setText(f"File foto tidak ditemukan:\\n{image_abs_path}")
+            img_label.setText(f"File foto tidak ditemukan:\n{image_abs_path}")
         layout.addWidget(img_label, 1)
 
         close_btn = QPushButton("Tutup")
@@ -553,7 +553,6 @@ class VisionMainWindow(QMainWindow):
         self._frozen_frame: Optional[np.ndarray] = None
         self._trigger_pending: bool = False
         self._last_continuous_log_ts: float = 0.0
-        self._last_fps: float = 0.0
 
         self._daily_ok: int = 0
         self._daily_ng: int = 0
@@ -583,13 +582,13 @@ class VisionMainWindow(QMainWindow):
         self._trigger_delay_timer.setSingleShot(True)
         self._trigger_delay_timer.timeout.connect(self._execute_triggered_capture)
 
+        self._space_shortcut = QShortcut(QKeySequence(Qt.Key_Space), self)
+        self._space_shortcut.activated.connect(self._on_manual_trigger_clicked)
+
         self._build_ui()
         self._connect_signals()
         self._refresh_template_list()
         self._load_initial_stats_and_logs()
-
-        self._space_shortcut = QShortcut(QKeySequence(Qt.Key_Space), self)
-        self._space_shortcut.activated.connect(self._on_manual_trigger_clicked)
 
         self.logger_worker.start()
         self.inspection_worker.start()
@@ -618,6 +617,30 @@ class VisionMainWindow(QMainWindow):
         info_layout.setSpacing(12)
 
         self.lbl_camera_info = QLabel("Kamera: Memulai...")
+        self.cmb_camera_source = QComboBox()
+        cam_choices = [
+            ("USB #0", "usb:0"),
+            ("USB #1", "usb:1"),
+            ("USB #2", "usb:2"),
+            ("PiCamera2 (RPi5)", "picamera2:0"),
+        ]
+        for label, data in cam_choices:
+            self.cmb_camera_source.addItem(label, data)
+
+        backend_key = self.cfg.camera_backend.strip().lower()
+        current_cam = f"{backend_key}:{self.cfg.camera_index}"
+        cam_idx = self.cmb_camera_source.findData(current_cam)
+        if cam_idx < 0 and backend_key == "usb":
+            self.cmb_camera_source.addItem(
+                f"USB #{self.cfg.camera_index}", current_cam
+            )
+            cam_idx = self.cmb_camera_source.count() - 1
+        if cam_idx >= 0:
+            self.cmb_camera_source.setCurrentIndex(cam_idx)
+
+        self.btn_reconnect_cam = QPushButton("Buka / Reconnect")
+        self.btn_reconnect_cam.setProperty("role", "primary")
+
         self.lbl_fps = QLabel("FPS: 0.0")
         self.lbl_fps.setStyleSheet(
             "font-family: 'Consolas', 'DejaVu Sans Mono'; font-weight: 700; color: #38BDF8;"
@@ -639,6 +662,8 @@ class VisionMainWindow(QMainWindow):
             )
 
         info_layout.addWidget(self.lbl_camera_info, 1)
+        info_layout.addWidget(self.cmb_camera_source)
+        info_layout.addWidget(self.btn_reconnect_cam)
         info_layout.addWidget(self.lbl_fps)
         info_layout.addWidget(self.lbl_gpio_badge)
         left_col.addWidget(info_bar)
@@ -798,6 +823,21 @@ class VisionMainWindow(QMainWindow):
         list_and_thumb.addLayout(thumb_col)
         tpl_layout.addLayout(list_and_thumb)
 
+        thresh_edit_row = QHBoxLayout()
+        thresh_edit_row.addWidget(QLabel("Threshold Terpilih:"))
+        self.spin_selected_threshold = QDoubleSpinBox()
+        self.spin_selected_threshold.setRange(0.50, 0.99)
+        self.spin_selected_threshold.setSingleStep(0.01)
+        self.spin_selected_threshold.setDecimals(2)
+        self.spin_selected_threshold.setValue(0.80)
+        self.spin_selected_threshold.setEnabled(False)
+        self.btn_update_threshold = QPushButton("Update Threshold")
+        self.btn_update_threshold.setProperty("role", "primary")
+        self.btn_update_threshold.setEnabled(False)
+        thresh_edit_row.addWidget(self.spin_selected_threshold)
+        thresh_edit_row.addWidget(self.btn_update_threshold, 1)
+        tpl_layout.addLayout(thresh_edit_row)
+
         self.btn_delete_template = QPushButton("Hapus Template Terpilih")
         self.btn_delete_template.setProperty("role", "danger")
         tpl_layout.addWidget(self.btn_delete_template)
@@ -811,10 +851,10 @@ class VisionMainWindow(QMainWindow):
         layout.setSpacing(12)
 
         guide = QLabel(
-            "Langkah Rekam Template (Teach-by-Example):\\n"
-            "1. Posisikan objek referensi di depan kamera.\\n"
-            "2. Tekan 'Freeze / Capture' untuk membekukan frame.\\n"
-            "3. Click-and-drag pada layar video untuk memilih kotak ROI.\\n"
+            "Langkah Rekam Template (Teach-by-Example):\n"
+            "1. Posisikan objek referensi di depan kamera.\n"
+            "2. Tekan 'Freeze / Capture' untuk membekukan frame.\n"
+            "3. Click-and-drag pada layar video untuk memilih kotak ROI.\n"
             "4. Isi Nama Template, atur Threshold, lalu klik 'Simpan Template'."
         )
         guide.setWordWrap(True)
@@ -937,9 +977,9 @@ class VisionMainWindow(QMainWindow):
         gpio_layout.setSpacing(8)
 
         lamp_row = QHBoxLayout()
-        self.ind_ok_lamp = QLabel(f"GPIO {self.cfg.gpio.ok_led_pin}\\nOK HIJAU\\nOFF")
-        self.ind_ng_lamp = QLabel(f"GPIO {self.cfg.gpio.ng_led_pin}\\nNG MERAH\\nOFF")
-        self.ind_buzzer = QLabel(f"GPIO {self.cfg.gpio.buzzer_pin}\\nBUZZER\\nOFF")
+        self.ind_ok_lamp = QLabel(f"GPIO {self.cfg.gpio.ok_led_pin}\nOK HIJAU\nOFF")
+        self.ind_ng_lamp = QLabel(f"GPIO {self.cfg.gpio.ng_led_pin}\nNG MERAH\nOFF")
+        self.ind_buzzer = QLabel(f"GPIO {self.cfg.gpio.buzzer_pin}\nBUZZER\nOFF")
         for ind in (self.ind_ok_lamp, self.ind_ng_lamp, self.ind_buzzer):
             ind.setAlignment(Qt.AlignCenter)
             ind.setMinimumHeight(64)
@@ -1045,13 +1085,11 @@ class VisionMainWindow(QMainWindow):
         self.btn_freeze.clicked.connect(self._toggle_freeze_frame)
         self.btn_clear_roi.clicked.connect(self.video_canvas.clear_roi)
         self.video_canvas.roi_changed.connect(self._on_roi_changed)
-        self.slider_threshold.valueChanged.connect(
-            lambda v: self.spin_threshold.setValue(v / 100.0)
-        )
-        self.spin_threshold.valueChanged.connect(
-            lambda v: self.slider_threshold.setValue(int(round(v * 100)))
-        )
+        self.slider_threshold.valueChanged.connect(self._on_threshold_slider_changed)
+        self.spin_threshold.valueChanged.connect(self._on_threshold_spin_changed)
         self.btn_save_template.clicked.connect(self._on_save_template)
+        self.btn_update_threshold.clicked.connect(self._on_update_template_threshold)
+        self.btn_reconnect_cam.clicked.connect(self._on_reconnect_camera)
 
         self.spin_trigger_delay.valueChanged.connect(self._on_config_changed)
         self.spin_hold_time.valueChanged.connect(self._on_config_changed)
@@ -1066,7 +1104,7 @@ class VisionMainWindow(QMainWindow):
         self.btn_export_csv.clicked.connect(self._on_export_csv)
         self.btn_export_csv_tab.clicked.connect(self._on_export_csv)
 
-        self.btn_refresh_logs.clicked.connect(self._load_initial_stats_and_logs)
+        self.btn_refresh_logs.clicked.connect(self._refresh_log_table)
         self.tbl_logs.cellClicked.connect(self._on_log_row_clicked)
 
         self.camera_worker.frame_ready.connect(self._on_camera_frame)
@@ -1076,6 +1114,11 @@ class VisionMainWindow(QMainWindow):
             self._on_inspection_finished
         )
         self.logger_worker.log_saved.connect(self._on_log_saved)
+        self.logger_worker.cleanup_completed.connect(
+            lambda cnt: self.statusBar().showMessage(
+                f"Auto-cleanup: {cnt} folder foto NG lama dihapus.", 6000
+            )
+        )
         self.logger_worker.logger_error.connect(
             lambda msg: self.statusBar().showMessage(msg, 6000)
         )
@@ -1116,6 +1159,8 @@ class VisionMainWindow(QMainWindow):
         self.btn_mode_run.setProperty("role", "primary" if is_run else "")
         self.btn_mode_teach.setProperty("role", "warning" if not is_run else "")
         self.btn_start_stop.setEnabled(is_run)
+        if hasattr(self, "_space_shortcut"):
+            self._space_shortcut.setEnabled(is_run)
         for btn in (self.btn_mode_run, self.btn_mode_teach):
             btn.style().unpolish(btn)
             btn.style().polish(btn)
@@ -1170,7 +1215,6 @@ class VisionMainWindow(QMainWindow):
         self.btn_start_stop.style().polish(self.btn_start_stop)
 
     def _on_camera_frame(self, frame_bgr: np.ndarray, fps: float) -> None:
-        self._last_fps = fps
         self.lbl_fps.setText(f"FPS: {fps:4.1f}")
         if self._mode == "TEACH" and self._teach_frozen:
             return
@@ -1201,8 +1245,58 @@ class VisionMainWindow(QMainWindow):
         self.video_canvas.set_placeholder_text(message)
         self.statusBar().showMessage(message, 10000)
 
+    def _on_reconnect_camera(self) -> None:
+        data = self.cmb_camera_source.currentData()
+        if isinstance(data, str) and ":" in data:
+            backend, idx_str = data.split(":", 1)
+            try:
+                idx = int(idx_str)
+            except ValueError:
+                idx = 0
+        else:
+            backend, idx = "usb", 0
+
+        self.cfg.camera_backend = backend
+        self.cfg.camera_index = idx
+        self.template_manager.save_config()
+
+        old_worker = self.camera_worker
+        for sig, slot in (
+            (old_worker.frame_ready, self._on_camera_frame),
+            (old_worker.camera_status, self._on_camera_status),
+            (old_worker.camera_error, self._on_camera_error),
+        ):
+            try:
+                sig.disconnect(slot)
+            except (RuntimeError, TypeError):
+                pass
+        old_worker.stop()
+        old_worker.deleteLater()
+
+        self.lbl_camera_info.setText("Kamera: Menghubungkan ulang...")
+        self.lbl_fps.setText("FPS: 0.0")
+        self.video_canvas.set_placeholder_text("Menghubungkan ke kamera...")
+
+        cam_source = create_camera_source(
+            backend=self.cfg.camera_backend,
+            device_index=self.cfg.camera_index,
+            width=self.cfg.camera_width,
+            height=self.cfg.camera_height,
+            fps=self.cfg.camera_fps,
+        )
+        self.camera_worker = CameraWorker(cam_source)
+        self.camera_worker.frame_ready.connect(self._on_camera_frame)
+        self.camera_worker.camera_status.connect(self._on_camera_status)
+        self.camera_worker.camera_error.connect(self._on_camera_error)
+        self.camera_worker.start()
+
     def _on_manual_trigger_clicked(self) -> None:
         if self._mode != "RUN":
+            return
+        focus_w = QApplication.focusWidget()
+        if isinstance(
+            focus_w, (QLineEdit, QPlainTextEdit, QSpinBox, QDoubleSpinBox, QDateEdit)
+        ):
             return
         if not self._is_running:
             self.statusBar().showMessage(
@@ -1329,6 +1423,16 @@ class VisionMainWindow(QMainWindow):
         else:
             self.lbl_roi_info.setText("ROI: Belum dipilih (drag mouse di layar video)")
 
+    def _on_threshold_slider_changed(self, value: int) -> None:
+        self.spin_threshold.blockSignals(True)
+        self.spin_threshold.setValue(value / 100.0)
+        self.spin_threshold.blockSignals(False)
+
+    def _on_threshold_spin_changed(self, value: float) -> None:
+        self.slider_threshold.blockSignals(True)
+        self.slider_threshold.setValue(int(round(value * 100)))
+        self.slider_threshold.blockSignals(False)
+
     def _on_save_template(self) -> None:
         name = self.txt_tpl_name.text().strip()
         roi = self.video_canvas.get_roi()
@@ -1359,7 +1463,7 @@ class VisionMainWindow(QMainWindow):
             QMessageBox.information(
                 self,
                 "Template Tersimpan",
-                f"Template '{meta.name}' berhasil disimpan ke:\\n{meta.image_path}",
+                f"Template '{meta.name}' berhasil disimpan ke:\n{meta.image_path}",
             )
         except Exception as exc:
             QMessageBox.critical(self, "Gagal Menyimpan Template", str(exc))
@@ -1396,6 +1500,8 @@ class VisionMainWindow(QMainWindow):
             self.lbl_tpl_thumb.clear()
             self.lbl_tpl_thumb.setText("Pratinjau")
             self.lbl_tpl_meta.setText("-")
+            self.spin_selected_threshold.setEnabled(False)
+            self.btn_update_threshold.setEnabled(False)
             return
         name = current.data(Qt.UserRole)
         img = self.template_manager.get_template_image(name)
@@ -1408,6 +1514,21 @@ class VisionMainWindow(QMainWindow):
             self.lbl_tpl_meta.setText(
                 f"{meta.width}x{meta.height} | {meta.threshold:.2f}"
             )
+            self.spin_selected_threshold.setValue(meta.threshold)
+            self.spin_selected_threshold.setEnabled(True)
+            self.btn_update_threshold.setEnabled(True)
+
+    def _on_update_template_threshold(self) -> None:
+        item = self.list_templates.currentItem()
+        if item is None:
+            return
+        name = item.data(Qt.UserRole)
+        new_thresh = self.spin_selected_threshold.value()
+        self.template_manager.update_template_threshold(name, new_thresh)
+        self._refresh_template_list(select_name=name)
+        self.statusBar().showMessage(
+            f"Threshold template '{name}' diperbarui ke {new_thresh:.2f}.", 4000
+        )
 
     def _on_delete_template(self) -> None:
         item = self.list_templates.currentItem()
@@ -1528,7 +1649,7 @@ class VisionMainWindow(QMainWindow):
             "font-family: 'Consolas', 'DejaVu Sans Mono'; font-size: 11px; color: #64748B;"
         )
         self.ind_ok_lamp.setText(
-            f"GPIO {self.cfg.gpio.ok_led_pin}\\nOK HIJAU\\n{'ON' if ok_on else 'OFF'}"
+            f"GPIO {self.cfg.gpio.ok_led_pin}\nOK HIJAU\n{'ON' if ok_on else 'OFF'}"
         )
         self.ind_ok_lamp.setStyleSheet(
             "background-color: #065F46; border: 1px solid #10B981; border-radius: 6px; "
@@ -1537,7 +1658,7 @@ class VisionMainWindow(QMainWindow):
             else off_style
         )
         self.ind_ng_lamp.setText(
-            f"GPIO {self.cfg.gpio.ng_led_pin}\\nNG MERAH\\n{'ON' if ng_on else 'OFF'}"
+            f"GPIO {self.cfg.gpio.ng_led_pin}\nNG MERAH\n{'ON' if ng_on else 'OFF'}"
         )
         self.ind_ng_lamp.setStyleSheet(
             "background-color: #7F1D1D; border: 1px solid #EF4444; border-radius: 6px; "
@@ -1546,7 +1667,7 @@ class VisionMainWindow(QMainWindow):
             else off_style
         )
         self.ind_buzzer.setText(
-            f"GPIO {self.cfg.gpio.buzzer_pin}\\nBUZZER\\n{'ON' if buzzer_on else 'OFF'}"
+            f"GPIO {self.cfg.gpio.buzzer_pin}\nBUZZER\n{'ON' if buzzer_on else 'OFF'}"
         )
         self.ind_buzzer.setStyleSheet(
             "background-color: #78350F; border: 1px solid #F59E0B; border-radius: 6px; "
@@ -1558,6 +1679,9 @@ class VisionMainWindow(QMainWindow):
     def _load_initial_stats_and_logs(self) -> None:
         self._daily_ok, self._daily_ng = self.logger_worker.get_today_stats()
         self._update_counter_labels()
+        self._refresh_log_table()
+
+    def _refresh_log_table(self) -> None:
         self._recent_logs = self.logger_worker.get_recent_logs(limit=50)
         self._render_log_table()
 
@@ -1599,7 +1723,11 @@ class VisionMainWindow(QMainWindow):
         entry = self._recent_logs[row]
         if not entry.image_path:
             return
-        img_abs = self.logger_worker.resolve_image_path(entry.image_path)
+        try:
+            img_abs = self.logger_worker.resolve_image_path(entry.image_path)
+        except ValueError as exc:
+            QMessageBox.warning(self, "Path Foto Tidak Valid", str(exc))
+            return
         NGImagePreviewDialog(entry, img_abs, self).exec()
 
     def _on_export_csv(self) -> None:
@@ -1612,7 +1740,7 @@ class VisionMainWindow(QMainWindow):
             QMessageBox.information(
                 self,
                 "Export CSV Berhasil",
-                f"Berhasil mengekspor {count} baris log inspeksi ke:\\n{out_path}",
+                f"Berhasil mengekspor {count} baris log inspeksi ke:\n{out_path}",
             )
         except Exception as exc:
             QMessageBox.critical(self, "Gagal Export CSV", str(exc))

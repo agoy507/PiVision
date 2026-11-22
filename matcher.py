@@ -96,10 +96,13 @@ class TemplateMatcherEngine:
 
         if hasattr(cv2, "AKAZE_create"):
             self._akaze = cv2.AKAZE_create()
+            self._feature_detector_name = "AKAZE"
         elif hasattr(cv2, "AKAZE") and hasattr(cv2.AKAZE, "create"):
             self._akaze = cv2.AKAZE.create()
+            self._feature_detector_name = "AKAZE"
         else:
             self._akaze = cv2.ORB_create()
+            self._feature_detector_name = "ORB"
         self._bf = cv2.BFMatcher(cv2.NORM_HAMMING, crossCheck=False)
 
         # Cache per nama template: fitur AKAZE & rotasi kasar Multi-Angle
@@ -202,11 +205,17 @@ class TemplateMatcherEngine:
             return mask
 
     def _get_coarse_rotated_cache(
-        self, name: str, gray_tpl: np.ndarray
+        self,
+        name: str,
+        gray_tpl: np.ndarray,
+        scale: Optional[float] = None,
+        step: Optional[int] = None,
     ) -> _CoarseCacheEntry:
         th, tw = gray_tpl.shape[:2]
-        scale = self.coarse_scale
-        step = self.coarse_step_deg
+        if scale is None or step is None:
+            with self._cache_lock:
+                scale = self.coarse_scale if scale is None else scale
+                step = self.coarse_step_deg if step is None else step
         key = (name, (th, tw), scale, step)
 
         with self._cache_lock:
@@ -380,14 +389,21 @@ class TemplateMatcherEngine:
                 angle_deg=0.0,
             )
 
+        # Ambil snapshot konfigurasi sudut secara atomik agar tahap coarse & fine konsisten
+        with self._cache_lock:
+            scale = self.coarse_scale
+            coarse_step = self.coarse_step_deg
+            fine_step = self.fine_step_deg
+
         # === TAHAP 1: COARSE (Skala 0.5x, 0°..350° dengan langkah kasar) ===
-        scale = self.coarse_scale
         coarse_frame = cv2.resize(
             gray_frame,
             (max(16, int(round(fw * scale))), max(16, int(round(fh * scale)))),
             interpolation=cv2.INTER_AREA,
         )
-        coarse_cache = self._get_coarse_rotated_cache(template.name, gray_tpl)
+        coarse_cache = self._get_coarse_rotated_cache(
+            template.name, gray_tpl, scale=scale, step=coarse_step
+        )
         ch, cw = coarse_cache.mask.shape[:2]
         if ch > coarse_frame.shape[0] or cw > coarse_frame.shape[1]:
             return MatchResult(
@@ -434,8 +450,7 @@ class TemplateMatcherEngine:
         fine_region = gray_frame[roi_y1:roi_y2, roi_x1:roi_x2]
         fine_mask = self._get_fine_mask(th, tw)
 
-        span = self.coarse_step_deg
-        fine_step = self.fine_step_deg
+        span = coarse_step
         fine_angles = [
             (best_coarse_angle + delta) % 360.0
             for delta in range(-span, span + 1, fine_step)
@@ -604,14 +619,31 @@ class TemplateMatcherEngine:
             bbox = None
             polygon = None
         else:
-            polygon = [(int(round(pt[0])), int(round(pt[1]))) for pt in projected]
-            xs = [p[0] for p in polygon]
-            ys = [p[1] for p in polygon]
-            x1 = int(np.clip(min(xs), 0, fw - 1))
-            y1 = int(np.clip(min(ys), 0, fh - 1))
-            x2 = int(np.clip(max(xs), 0, fw - 1))
-            y2 = int(np.clip(max(ys), 0, fh - 1))
-            bbox = (x1, y1, max(1, x2 - x1), max(1, y2 - y1))
+            raw_poly = [(int(round(pt[0])), int(round(pt[1]))) for pt in projected]
+            xs = [p[0] for p in raw_poly]
+            ys = [p[1] for p in raw_poly]
+            raw_x1, raw_x2 = min(xs), max(xs)
+            raw_y1, raw_y2 = min(ys), max(ys)
+
+            x1 = int(np.clip(raw_x1, 0, fw - 1))
+            y1 = int(np.clip(raw_y1, 0, fh - 1))
+            x2 = int(np.clip(raw_x2, 0, fw - 1))
+            y2 = int(np.clip(raw_y2, 0, fh - 1))
+
+            if (
+                raw_x2 <= 0
+                or raw_y2 <= 0
+                or raw_x1 >= fw
+                or raw_y1 >= fh
+                or (x2 - x1) < 8
+                or (y2 - y1) < 8
+            ):
+                score *= 0.35
+                bbox = None
+                polygon = None
+            else:
+                polygon = raw_poly
+                bbox = (x1, y1, x2 - x1, y2 - y1)
 
         matched = score >= template.threshold and bbox is not None
         return MatchResult(
@@ -657,31 +689,54 @@ class InspectionWorker(QThread):
             fine_step_deg=fine_step_deg,
         )
         self._queue: "queue.Queue[Optional[InspectionJob]]" = queue.Queue(maxsize=4)
+        self._submit_lock = threading.Lock()
         self._running = False
 
     def set_angle_steps(self, coarse_step_deg: int, fine_step_deg: int) -> None:
         self.engine.set_angle_steps(coarse_step_deg, fine_step_deg)
 
     def submit_job(self, job: InspectionJob) -> bool:
-        if not self._running:
-            return False
-
-        if not job.is_trigger_mode:
-            if self._queue.full():
+        with self._submit_lock:
+            if not self._running:
                 return False
+
+            if not job.is_trigger_mode:
+                try:
+                    self._queue.put_nowait(job)
+                    return True
+                except queue.Full:
+                    return False
+
+            if self._queue.full():
+                kept_sentinel = False
+                drained: List[InspectionJob] = []
+                while not self._queue.empty():
+                    try:
+                        item = self._queue.get_nowait()
+                    except queue.Empty:
+                        break
+                    if item is None:
+                        kept_sentinel = True
+                    else:
+                        drained.append(item)
+                if kept_sentinel:
+                    try:
+                        self._queue.put_nowait(None)
+                    except queue.Full:
+                        pass
+                    return False
+                # Sisakan job terbaru sebelumnya jika masih muat selain slot baru
+                for old_job in drained[-(self._queue.maxsize - 1) :]:
+                    try:
+                        self._queue.put_nowait(old_job)
+                    except queue.Full:
+                        break
+
             try:
                 self._queue.put_nowait(job)
                 return True
             except queue.Full:
                 return False
-
-        while self._queue.full():
-            try:
-                self._queue.get_nowait()
-            except queue.Empty:
-                break
-        self._queue.put(job)
-        return True
 
     def clear_feature_cache(self, template_name: Optional[str] = None) -> None:
         self.engine.clear_cache(template_name)
@@ -709,9 +764,18 @@ class InspectionWorker(QThread):
             self.inspection_finished.emit(result, job.frame_bgr, job.is_trigger_mode)
 
     def stop(self) -> None:
-        self._running = False
-        try:
-            self._queue.put_nowait(None)
-        except queue.Full:
-            pass
+        with self._submit_lock:
+            self._running = False
+            while self._queue.full():
+                try:
+                    item = self._queue.get_nowait()
+                    if item is None:
+                        self._queue.put_nowait(None)
+                        break
+                except queue.Empty:
+                    break
+            try:
+                self._queue.put_nowait(None)
+            except queue.Full:
+                pass
         self.wait(3000)

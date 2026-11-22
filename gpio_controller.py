@@ -11,6 +11,7 @@ Kontrol GPIO Input & Output lintas OS:
 from __future__ import annotations
 
 import platform
+import threading
 from datetime import datetime
 from typing import List, Optional
 
@@ -47,6 +48,7 @@ class BaseGPIOController(QObject):
         self.simulation_mode: bool = True
         self.mode_badge: str = f"[SIMULASI GPIO - {platform.system().upper()}]"
 
+        self._state_lock = threading.Lock()
         self._trigger_enabled: bool = False
         self._mute_buzzer: bool = False
         self._ok_state: bool = False
@@ -58,6 +60,11 @@ class BaseGPIOController(QObject):
         self._hold_timer = QTimer(self)
         self._hold_timer.setSingleShot(True)
         self._hold_timer.timeout.connect(self._on_hold_timeout)
+
+        # Timer non-blocking untuk pelepasan simulasi pulse trigger
+        self._sim_release_timer = QTimer(self)
+        self._sim_release_timer.setSingleShot(True)
+        self._sim_release_timer.timeout.connect(self._on_sim_trigger_release)
 
         # Timer non-blocking untuk sekuens Test GPIO
         self._test_timers: List[QTimer] = []
@@ -78,7 +85,8 @@ class BaseGPIOController(QObject):
         self.config.active_high = active_high
 
     def set_trigger_enabled(self, enabled: bool) -> None:
-        self._trigger_enabled = enabled
+        with self._state_lock:
+            self._trigger_enabled = enabled
         self._log_pin_event(
             f"Trigger Input (BCM {self.config.trigger_pin}): {'ENABLED' if enabled else 'DISABLED'}"
         )
@@ -93,25 +101,28 @@ class BaseGPIOController(QObject):
         if muted and self._buzzer_state:
             self._set_output_states(self._ok_state, self._ng_state, False)
 
+    def _on_sim_trigger_release(self) -> None:
+        with self._state_lock:
+            self._sensor_active = False
+        self.sensor_state_changed.emit(False)
+        self._log_pin_event(
+            f"PIN TRIGGER (BCM {self.config.trigger_pin}): RELEASED -> HIGH (IDLE)"
+        )
+
     def simulate_trigger_pulse(self) -> None:
         """Memicu sinyal trigger dari tombol software/Spasi untuk pengujian & debug."""
-        self._sensor_active = True
+        with self._state_lock:
+            self._sensor_active = True
+            enabled = self._trigger_enabled
         self.sensor_state_changed.emit(True)
         self._log_pin_event(
             f"PIN TRIGGER (BCM {self.config.trigger_pin}): PRESSED -> LOW "
-            f"({'DITERIMA' if self._trigger_enabled else 'DIABAIKAN - TIDAK RUNNING'})"
+            f"({'DITERIMA' if enabled else 'DIABAIKAN - TIDAK RUNNING'})"
         )
-        if self._trigger_enabled:
+        if enabled:
             self.trigger_received.emit()
 
-        def _release() -> None:
-            self._sensor_active = False
-            self.sensor_state_changed.emit(False)
-            self._log_pin_event(
-                f"PIN TRIGGER (BCM {self.config.trigger_pin}): RELEASED -> HIGH (IDLE)"
-            )
-
-        QTimer.singleShot(180, _release)
+        self._sim_release_timer.start(180)
 
     def _set_output_states(
         self, ok_on: bool, ng_on: bool, buzzer_on: bool
@@ -185,7 +196,10 @@ class BaseGPIOController(QObject):
         self._test_timers.clear()
 
     def cleanup(self) -> None:
-        self._trigger_enabled = False
+        with self._state_lock:
+            self._trigger_enabled = False
+            self._sensor_active = False
+        self._sim_release_timer.stop()
         self.all_off()
         self._log_pin_event("Cleanup GPIO selesai — semua pin OFF dan dilepas aman.")
 
@@ -261,7 +275,11 @@ class HardwareGPIOController(BaseGPIOController):
         if not _GPIOZERO_AVAILABLE or LGPIOFactory is None:
             raise RuntimeError("gpiozero/lgpio tidak terpasang pada sistem ini.")
 
-        Device.pin_factory = LGPIOFactory()
+        if Device.pin_factory is None or (
+            isinstance(LGPIOFactory, type)
+            and not isinstance(Device.pin_factory, LGPIOFactory)
+        ):
+            Device.pin_factory = LGPIOFactory()
 
         self._button = Button(
             self.config.trigger_pin,
@@ -295,16 +313,19 @@ class HardwareGPIOController(BaseGPIOController):
         self._log_pin_event(f"Hardware RP1 siap ({relay_mode}).")
 
     def _handle_physical_trigger_pressed(self) -> None:
-        self._sensor_active = True
+        with self._state_lock:
+            self._sensor_active = True
+            enabled = self._trigger_enabled
         self.sensor_state_changed.emit(True)
         self._log_pin_event(
             f"SENSOR FISIK (BCM {self.config.trigger_pin}): TRIGGERED (LOW)"
         )
-        if self._trigger_enabled:
+        if enabled:
             self.trigger_received.emit()
 
     def _handle_physical_trigger_released(self) -> None:
-        self._sensor_active = False
+        with self._state_lock:
+            self._sensor_active = False
         self.sensor_state_changed.emit(False)
 
     def _apply_hardware_outputs(

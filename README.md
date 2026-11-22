@@ -140,14 +140,17 @@ Berikut adalah pemetaan pin header GPIO 40-pin Raspberry Pi 5 untuk integrasi se
 
 ## Cara Penggunaan
 
-1. **Pilih Sumber Kamera:** Pilih indeks kamera USB atau PiCamera2 melalui dropdown di panel kiri, lalu klik **Buka Kamera**.
+1. **Pilih Sumber Kamera:** Pilih sumber kamera (`USB #0`, `USB #1`, `USB #2`, atau `PiCamera2 (RPi5)`) melalui dropdown pada panel info bawah layar video, lalu klik **Buka / Reconnect**.
 2. **Buat Template Referensi (Teach-by-Example):**
+   - Klik **MODE TEACH** di bagian kanan atas.
    - Letakkan sampel produk standar (OK) di depan kamera.
-   - Klik tombol **Buat Template Baru**.
-   - Tarik kotak ROI di layar pratinjau kamera untuk memilih area referensi.
-   - Tentukan nama template, ambang batas kesamaan (*similarity threshold* misal `0.80`), dan metode matching.
-   - Klik **Simpan Template**.
+   - Klik **FREEZE / CAPTURE FRAME** untuk membekukan gambar pratinjau.
+   - Tarik kotak ROI (*click-and-drag*) langsung di layar video untuk memilih area referensi.
+   - Isi **Nama Template** dan atur **Threshold Kemiripan** (misal `0.80`).
+   - Klik **SIMPAN TEMPLATE REFERENSI**.
 3. **Mulai Inspeksi:**
-   - Gunakan tombol **Trigger Inspeksi** manual atau sambungkan sensor optik ke GPIO Pin 16 (BCM 23).
-   - Mode kontinu juga dapat diaktifkan untuk melakukan inspeksi berulang per frame secara otomatis.
-   - Status OK/NG beserta skor kecocokan dan rotasi produk akan ditampilkan secara langsung di layar dan dicatat ke database.
+   - Kembali ke **MODE RUN**, pilih **Metode** (*0° Tetap*, *Multi-Angle 0°–360°*, atau *AKAZE + Affine 2D*), lalu pilih template pada daftar (atau centang **Auto-Match**).
+   - Threshold template terpilih juga dapat disesuaikan langsung dari panel RUN lewat input **Threshold Terpilih** + tombol **Update Threshold**.
+   - Klik **START INSPEKSI**.
+   - Pada *Trigger Mode*, tekan tombol **MANUAL TRIGGER [SPASI]** atau picu sensor fisik pada GPIO Pin 16 (BCM 23). Pada *Continuous Mode*, inspeksi berjalan otomatis pada setiap frame.
+   - Status OK/NG beserta skor kecocokan dan sudut rotasi ditampilkan secara langsung di layar dan dicatat ke database SQLite.

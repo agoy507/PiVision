@@ -83,14 +83,28 @@ class DataLoggerWorker(QThread):
         self._running = False
         self._init_database()
 
+    def _connect(self) -> sqlite3.Connection:
+        conn = sqlite3.connect(self.db_path, timeout=10.0)
+        conn.execute("PRAGMA busy_timeout = 5000;")
+        return conn
+
     def resolve_image_path(self, rel_path: str) -> Path:
         """Mengonversi path relatif dari SQLite menjadi pathlib.Path yang valid di Windows/Linux."""
-        normalized = rel_path.replace("\\\\", "/")
-        parts = PurePosixPath(normalized).parts
-        return self.base_dir.joinpath(*parts)
+        normalized = rel_path.replace("\\", "/").strip()
+        if not normalized:
+            raise ValueError("Path gambar tidak boleh kosong.")
+        pure = PurePosixPath(normalized)
+        if pure.is_absolute() or Path(normalized).is_absolute() or (
+            len(normalized) >= 2 and normalized[1] == ":"
+        ):
+            raise ValueError(f"Path gambar harus relatif terhadap base_dir: {rel_path}")
+        resolved = self.base_dir.joinpath(*pure.parts).resolve()
+        if not resolved.is_relative_to(self.base_dir):
+            raise ValueError(f"Path gambar keluar dari direktori proyek: {rel_path}")
+        return resolved
 
     def _init_database(self) -> None:
-        conn = sqlite3.connect(self.db_path)
+        conn = self._connect()
         try:
             conn.execute("PRAGMA journal_mode=WAL;")
             conn.execute(
@@ -135,7 +149,7 @@ class DataLoggerWorker(QThread):
 
     @staticmethod
     def _sanitize_filename(text: str) -> str:
-        safe = re.sub(r"[^A-Za-z0-9_\\-]+", "_", text.strip())
+        safe = re.sub(r"[^A-Za-z0-9_-]+", "_", text.strip())
         return safe.strip("_") or "unknown"
 
     @staticmethod
@@ -232,7 +246,7 @@ class DataLoggerWorker(QThread):
             if removed > 0:
                 self.cleanup_completed.emit(removed)
 
-        conn = sqlite3.connect(self.db_path)
+        conn = self._connect()
         conn.execute("PRAGMA journal_mode=WAL;")
         try:
             while self._running or not self._queue.empty():
@@ -291,7 +305,7 @@ class DataLoggerWorker(QThread):
         self.wait(4000)
 
     def get_recent_logs(self, limit: int = 50) -> List[LogEntry]:
-        conn = sqlite3.connect(self.db_path)
+        conn = self._connect()
         try:
             rows = conn.execute(
                 """
@@ -303,12 +317,15 @@ class DataLoggerWorker(QThread):
                 (int(limit),),
             ).fetchall()
             return [LogEntry(*row) for row in rows]
+        except sqlite3.Error as exc:
+            self.logger_error.emit(f"Gagal membaca riwayat log: {exc}")
+            return []
         finally:
             conn.close()
 
     def get_today_stats(self) -> Tuple[int, int]:
         today_prefix = datetime.now().strftime("%Y-%m-%d") + "%"
-        conn = sqlite3.connect(self.db_path)
+        conn = self._connect()
         try:
             rows = conn.execute(
                 """
@@ -321,6 +338,9 @@ class DataLoggerWorker(QThread):
             ).fetchall()
             counts = {status: int(cnt) for status, cnt in rows}
             return counts.get("OK", 0), counts.get("NG", 0)
+        except sqlite3.Error as exc:
+            self.logger_error.emit(f"Gagal membaca statistik harian: {exc}")
+            return 0, 0
         finally:
             conn.close()
 
@@ -331,11 +351,14 @@ class DataLoggerWorker(QThread):
         Mengekspor log inspeksi dalam rentang tanggal (YYYY-MM-DD s/d YYYY-MM-DD)
         ke folder exports/ dengan encoding="utf-8" dan newline="".
         """
+        if start_date > end_date:
+            raise ValueError("Tanggal mulai tidak boleh lebih besar dari tanggal akhir.")
+
         self.exports_dir.mkdir(parents=True, exist_ok=True)
         start_ts = f"{start_date} 00:00:00"
         end_ts = f"{end_date} 23:59:59"
 
-        conn = sqlite3.connect(self.db_path)
+        conn = self._connect()
         try:
             rows = conn.execute(
                 """

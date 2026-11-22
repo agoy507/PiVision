@@ -18,7 +18,13 @@ sudo apt install -y \
 
 # 2. Pastikan user memiliki hak akses ke device video & gpio
 echo "[2/4] Mengonfigurasi hak akses grup video & gpio..."
-sudo usermod -aG video,gpio "$USER" || true
+GROUPS_ADDED=0
+for grp in video gpio; do
+  if ! id -nG "$USER" | grep -qw "$grp"; then
+    sudo usermod -aG "$grp" "$USER" || true
+    GROUPS_ADDED=1
+  fi
+done
 
 # 3. Buat direktori runtime jika belum ada
 mkdir -p templates data ng_captures exports
@@ -36,6 +42,15 @@ source venv/bin/activate
 echo "[4/4] Menginstal dependensi Python dari requirements-rpi.txt..."
 pip install --upgrade pip
 pip install -r requirements-rpi.txt
+
+if [ "$GROUPS_ADDED" -eq 1 ]; then
+  echo ""
+  echo "[PERHATIAN] User '$USER' baru saja ditambahkan ke grup video/gpio."
+  echo "Keanggotaan grup Linux baru aktif setelah logout/login ulang (atau jalankan 'newgrp gpio')."
+  echo "Jika hardware GPIO atau /dev/video* masih ditolak izinnya pada sesi ini,"
+  echo "silakan reboot atau login ulang lalu jalankan: source venv/bin/activate && python3 main.py"
+  echo ""
+fi
 
 echo "=========================================================="
 echo "  Instalasi selesai!"

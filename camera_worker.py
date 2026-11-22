@@ -273,6 +273,9 @@ class CameraWorker(QThread):
     def run(self) -> None:
         self._running = True
         opened, info_or_err = self._source.open()
+        if not self._running:
+            self._source.release()
+            return
         if not opened:
             self.camera_status.emit(False, "Kamera tidak tersedia")
             self.camera_error.emit(info_or_err)

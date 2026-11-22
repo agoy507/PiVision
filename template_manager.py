@@ -85,14 +85,23 @@ class TemplateManager:
 
     @staticmethod
     def sanitize_name(name: str) -> str:
-        cleaned = re.sub(r"[^A-Za-z0-9_\\-]+", "_", name.strip())
+        cleaned = re.sub(r"[^A-Za-z0-9_-]+", "_", name.strip())
         cleaned = cleaned.strip("_")
         return cleaned or f"template_{datetime.now().strftime('%Y%m%d_%H%M%S')}"
 
     def resolve_relative_path(self, rel_path: str) -> Path:
-        normalized = rel_path.replace("\\\\", "/")
-        parts = PurePosixPath(normalized).parts
-        return self.base_dir.joinpath(*parts)
+        normalized = rel_path.replace("\\", "/").strip()
+        if not normalized:
+            raise ValueError("Path relatif tidak boleh kosong.")
+        pure = PurePosixPath(normalized)
+        if pure.is_absolute() or Path(normalized).is_absolute() or (
+            len(normalized) >= 2 and normalized[1] == ":"
+        ):
+            raise ValueError(f"Path harus relatif terhadap direktori proyek: {rel_path}")
+        resolved = self.base_dir.joinpath(*pure.parts).resolve()
+        if not resolved.is_relative_to(self.base_dir):
+            raise ValueError(f"Path tidak diizinkan keluar dari base_dir: {rel_path}")
+        return resolved
 
     @staticmethod
     def _write_image_unicode_safe(file_path: Path, image_bgr: np.ndarray) -> bool:
@@ -166,7 +175,10 @@ class TemplateManager:
             rel_path = str(item.get("image_path", "")).strip()
             if not name or not rel_path:
                 continue
-            abs_path = self.resolve_relative_path(rel_path)
+            try:
+                abs_path = self.resolve_relative_path(rel_path)
+            except ValueError:
+                continue
             if abs_path.exists():
                 meta = TemplateMetadata(
                     name=name,
@@ -211,7 +223,20 @@ class TemplateManager:
             raise ValueError("Ukuran ROI terlalu kecil (minimal 16x16 piksel).")
 
         crop = frame_bgr[y1:y2, x1:x2].copy()
-        safe_folder = self.sanitize_name(display_name)
+        if display_name in self.templates:
+            safe_folder = self.templates[display_name].folder
+        else:
+            base_folder = self.sanitize_name(display_name)
+            used_folders = {
+                m.folder for k, m in self.templates.items() if k != display_name
+            }
+            safe_folder = base_folder
+            suffix = 2
+            while safe_folder in used_folders or (
+                self.templates_dir / safe_folder
+            ).exists():
+                safe_folder = f"{base_folder}_{suffix}"
+                suffix += 1
         tpl_dir = self.templates_dir / safe_folder
         tpl_dir.mkdir(parents=True, exist_ok=True)
         img_file = tpl_dir / "ref.png"
@@ -240,9 +265,11 @@ class TemplateManager:
         if meta is None:
             return False
 
-        tpl_dir = self.templates_dir / meta.folder
-        if tpl_dir.exists() and tpl_dir.is_dir():
-            shutil.rmtree(tpl_dir, ignore_errors=True)
+        still_used = any(m.folder == meta.folder for m in self.templates.values())
+        if not still_used:
+            tpl_dir = self.templates_dir / meta.folder
+            if tpl_dir.exists() and tpl_dir.is_dir():
+                shutil.rmtree(tpl_dir, ignore_errors=True)
 
         self.save_config()
         return True
