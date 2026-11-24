@@ -14,7 +14,7 @@ Dilengkapi dengan antarmuka operator HMI (*Human Machine Interface*) industrial 
   - Penghitung produksi (*Total*, *OK*, *NG*, *Yield %*) dengan tombol reset.
   - Gambar Region of Interest (ROI) secara interaktif langsung pada layar kamera.
   - Mode inspeksi **Kontinu** (otomatis per frame) atau **Trigger GPIO / Manual**.
-  - Badge deteksi sistem: otomatis menampilkan `[SIMULASI GPIO - WINDOWS]` atau `[HARDWARE GPIO - RPI5]`.
+  - Badge deteksi sistem: otomatis menampilkan `[SIMULASI GPIO - WINDOWS]` atau `[GPIO AKTIF - RPI5 LGPIO]`.
 
 - **3 Algoritma Vision Matching (0° – 360°)**
   1. **Template Matching (0° Tetap)**: Cepat dan efisien untuk objek dengan orientasi tetap menggunakan `cv2.TM_CCOEFF_NORMED`.
